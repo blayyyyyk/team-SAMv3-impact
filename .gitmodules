@@ -1,0 +1,3 @@
+[submodule "submodules/sam3-onnx"]
+	path = submodules/sam3-onnx
+	url = https://github.com/impact-team-2/sam3-onnx.git
