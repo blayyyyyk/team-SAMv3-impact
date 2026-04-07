@@ -19,3 +19,4 @@ checkpoints/**/*.safetensors
 checkpoints/*.safetensors
 
 /venv
+boostlet_test

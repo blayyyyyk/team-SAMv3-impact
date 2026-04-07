@@ -1,9 +1,7 @@
-from impact_team_2.train.data import make_fake_box
-from torchmetrics import Metric, MetricCollection
-from typing import cast, Literal
 import os
 from argparse import ArgumentParser
 from pathlib import Path
+from typing import Literal, cast
 
 import cv2
 import numpy as np
@@ -12,12 +10,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
-from torchmetrics.segmentation import DiceScore
-from torchmetrics.classification import BinaryJaccardIndex
-from torchmetrics import MeanMetric
-from transformers import Sam3Model, Sam3Processor, pipeline
-import torch
 from torch.utils.tensorboard import SummaryWriter
+from torchmetrics import MeanMetric, Metric, MetricCollection
+from torchmetrics.classification import BinaryJaccardIndex
+from torchmetrics.segmentation import DiceScore
+from transformers import Sam3Model, Sam3Processor, pipeline
+
+from impact_team_2.train.data import make_fake_box
 
 # Initialize before your loop
 writer = SummaryWriter(log_dir="runs/sam3_experiment")
@@ -35,7 +34,7 @@ else:
     device = torch.device("cpu")
 
 tracked_metrics = MetricCollection([
-    DiceScore(num_classes=2), 
+    DiceScore(num_classes=2),
     BinaryJaccardIndex(),
     MeanMetric(),
 ])
@@ -46,7 +45,7 @@ global_step = 0
 
 def _run_epoch(model, processor, dataloader, optimizer, loss_fn, metrics: MetricCollection):
     global global_step
-    
+
     for batch_images, batch_masks, batch_boxes in dataloader:
         optimizer.zero_grad() # clear gradients
         images_list = [img.numpy() for img in batch_images]
@@ -78,7 +77,7 @@ def _run_epoch(model, processor, dataloader, optimizer, loss_fn, metrics: Metric
         if model.training:
             loss.backward()
             optimizer.step()
-            
+
         predicted_probs = torch.sigmoid(predicted_logits_resized)
 
         for k, v in metrics.items():
@@ -89,20 +88,20 @@ def _run_epoch(model, processor, dataloader, optimizer, loss_fn, metrics: Metric
                 writer.add_scalar("loss/step_loss", step_loss, global_step)
                 writer.add_scalar("loss/avg_loss", avg_loss, global_step)
                 print(f"{step_loss=}, {avg_loss=}")
-                
+
             else:
                 metrics[k].update(predicted_probs, target_masks.long()) # type:ignore
                 step_val = metrics[k].compute()
                 writer.add_scalar(f"other/{k}", step_val, global_step)
-                
-            
-        
+
+
+
         global_step += 1
 
     return
 
 tracked_metrics = MetricCollection({
-    "dice": DiceScore(num_classes=2), 
+    "dice": DiceScore(num_classes=2),
     "iou": BinaryJaccardIndex(),
     "avg_loss": MeanMetric()
 })
@@ -111,7 +110,7 @@ class SAMTrainer:
     def __init__(self, images: np.ndarray, masks: np.ndarray, boxes: np.ndarray, epochs: int = 20, lr = 1e-4):
         self.processor = Sam3Processor.from_pretrained("facebook/sam3")
         self.model = Sam3Model.from_pretrained("facebook/sam3").to(device)
-        
+
         # freeze weights other than mask decoder
         # saves vram
         for name, param in self.model.named_parameters():
@@ -123,12 +122,12 @@ class SAMTrainer:
         self.dataset = SAM3Dataset(images, masks, boxes)
         self.dataloaders = {}
         self.dataloaders["train"] = DataLoader(self.dataset, batch_size=1, shuffle=True)
-        
+
         self.epochs = epochs
-        
+
         self.optimizer = Adam(params=[p for p in self.model.parameters() if p.requires_grad], lr=lr)
         self.loss_fn = nn.BCEWithLogitsLoss()
-        
+
         self.metrics = {}
         self.metrics["train"] = tracked_metrics.clone().to(device)
 
@@ -153,32 +152,32 @@ class SAMTrainer:
             self.model.eval()
             if split_k == "train":
                 self.model.train()
-            
+
             for epoch in range(self.epochs):
                 _run_epoch(self.model, self.processor, split_dl, self.optimizer, self.loss_fn, self.metrics[split_k])
                 vals = self.metrics[split_k].compute()
                 print(f"\n======= Epoch {epoch + 1}/{self.epochs} Summary =======")
                 for k, v in vals.items():
                     print(f"{k}: {v}")
-                
+
         print("Training Complete.")
-                
+
     def save_model(self, out_path: str):
         os.makedirs(out_path, exist_ok=True)
         self.model.save_weights(f"{out_path}/sam3_finetuned_weights.safetensors")
         self.processor.save_pretrained(out_path)
         print(f"Model weights and processor successfully saved to: {out_path}")
-    
+
 
 def train_sam(images_in: str, masks_in: str, model_out: str, epochs: int = 20, val_split: float = 0.2, lr = 1e-4):
     images = np.load(images_in)["images"]
     masks = np.load(masks_in)["masks"]
-    
+
     # you would replace this with the UNet bounding box generation #
     boxes = np.ones((masks.shape[0], 4))
     for i in range(masks.shape[0]):
         boxes[i] = make_fake_box(masks[i])
-    
+
     trainer = SAMTrainer(images, masks, boxes, epochs, lr)
     trainer.make_validation_split(val_split)
     trainer.start()
